@@ -1,0 +1,19 @@
+# Core
+streamlit>=1.33
+python-dotenv>=1.0
+fpdf2>=2.7
+
+# LLM providers — official SDKs (lazy-imported; install only what you use)
+anthropic>=0.39            # Claude
+openai>=1.40               # GPT-4o  AND  OpenRouter (OpenAI-compatible base_url)
+google-generativeai>=0.8   # Gemini
+groq>=0.11                 # Llama 3.3 70B (free)
+ollama>=0.3                # local open-source models
+
+# Search providers (lazy-imported)
+exa-py>=1.0
+tavily-python>=0.5
+firecrawl-py>=1.0
+
+# Used only for the lightweight Ollama liveness ping in config.py
+requests>=2.31
