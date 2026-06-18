@@ -27,6 +27,7 @@ BOUNDARIES:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -455,12 +456,23 @@ def single_tab(provider: str | None, force: bool) -> None:
 
     actual = selected or company
     if run and actual:
-        with st.spinner(f"Researching {actual}…"):
-            try:
-                r = report.build(actual, provider=provider, force=force, urls=urls)
-            except Exception as e:
-                st.error(f"Failed: {e}")
-                return
+        status = st.status("", expanded=False)
+        try:
+            def _on_single_progress(stage: str, _: str):
+                if stage == "researching":
+                    status.update(label=f"🔍 Researching {actual}…", state="running")
+                elif stage == "generating":
+                    status.update(label=f"🤖 Generating report…", state="running")
+                elif stage == "cache_hit":
+                    status.update(label=f"✅ Using cached report for {actual}", state="complete")
+            r = report.build(actual, provider=provider, force=force, urls=urls,
+                             progress_callback=_on_single_progress)
+        except Exception as e:
+            status.update(label="❌ Failed", state="error")
+            st.error(f"Failed: {e}")
+            return
+        status.update(label=f"✅ Report ready for {actual}", state="complete")
+        status.expanded = False
         render_report(r)
     elif not actual:
         st.markdown("<br><p style='color:#94a3b8;text-align:center'>"
@@ -495,13 +507,28 @@ def compare_tab(provider: str | None, force: bool) -> None:
 
     if st.button("⚖️ Compare", type="primary", disabled=not valid,
                  width="stretch"):
-        with st.spinner(f"Building {len(companies)} reports + comparison…"):
-            try:
-                res = compare_mod.compare(companies, provider=provider, force=force,
-                                          urls=urls)
-            except Exception as e:
-                st.error(f"Failed: {e}")
-                return
+        status = st.status("", expanded=False)
+        try:
+            n = len(companies)
+
+            def _on_cmp_progress(stage: str, company_name: str):
+                if stage == "researching":
+                    status.update(label=f"🔍 [{company_name}] Researching…", state="running")
+                elif stage == "generating":
+                    status.update(label=f"🤖 [{company_name}] Generating report…", state="running")
+                elif stage == "cache_hit":
+                    status.update(label=f"✅ [{company_name}] Using cached report", state="running")
+                elif stage == "comparing":
+                    status.update(label=f"⚖️ Building comparison matrix ({n} companies)…", state="running")
+
+            res = compare_mod.compare(companies, provider=provider, force=force,
+                                      urls=urls, progress_callback=_on_cmp_progress)
+        except Exception as e:
+            status.update(label="❌ Failed", state="error")
+            st.error(f"Failed: {e}")
+            return
+        status.update(label="✅ Comparison ready", state="complete")
+        status.expanded = False
 
         if res.matrix:
             _header("Comparison Matrix", "📊")
@@ -641,19 +668,49 @@ def landscape_tab(provider: str | None, force: bool) -> None:
 
     if st.button("🏟️ Generate Landscape", type="primary", disabled=not valid,
                  width="stretch"):
-        with st.spinner(f"Analyzing {len(companies)} companies…"):
-            try:
-                l = landscape.build(companies, provider=provider, force=force,
-                                    urls=urls)
-            except Exception as e:
-                st.error(f"Failed: {e}")
-                return
+        status = st.status("", expanded=False)
+        try:
+            n = len(companies)
+
+            def _on_landscape_progress(stage: str, company_name: str):
+                if stage == "researching":
+                    status.update(label=f"🔍 [{company_name}] Researching…", state="running")
+                elif stage == "generating":
+                    status.update(label=f"🤖 [{company_name}] Generating report…", state="running")
+                elif stage == "cache_hit":
+                    status.update(label=f"✅ [{company_name}] Using cached report", state="running")
+                elif stage == "analyzing":
+                    status.update(label=f"🏟️ Building landscape analysis ({n} companies)…", state="running")
+
+            l = landscape.build(companies, provider=provider, force=force,
+                                urls=urls, progress_callback=_on_landscape_progress)
+        except Exception as e:
+            status.update(label="❌ Failed", state="error")
+            st.error(f"Failed: {e}")
+            return
+        status.update(label="✅ Landscape ready", state="complete")
+        status.expanded = False
         _render_landscape(l)
 
 
 # ── main ──────────────────────────────────────────────────────────────────
 
+def _silence_proactor_errors(loop, context):
+    """Suppress noisy Windows asyncio proactor errors from thread-closed sockets."""
+    exc = context.get("exception")
+    handle = str(context.get("handle", ""))
+    if isinstance(exc, ConnectionResetError) and "_ProactorBasePipeTransport" in handle:
+        return
+    loop.default_exception_handler(context)
+
+
 def main() -> None:
+    try:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(_silence_proactor_errors)
+    except RuntimeError:
+        pass
+
     _inject_css()
 
     provider, force = _render_sidebar()

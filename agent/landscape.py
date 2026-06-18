@@ -30,6 +30,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 
 from . import cache as cache_mod
@@ -169,7 +171,8 @@ def _build_prompt(reports: list[report.Report]) -> str:
 
 def build(companies: list[str], provider: str | None = None,
           force: bool = False,
-          urls: list[str] | None = None) -> CompetitiveLandscape:
+          urls: list[str] | None = None,
+          progress_callback: Callable[[str, str], None] | None = None) -> CompetitiveLandscape:
     companies = [c.strip() for c in companies if c.strip()]
     if len(companies) < 3:
         raise ValueError("provide at least 3 companies for competitive landscape")
@@ -184,10 +187,19 @@ def build(companies: list[str], provider: str | None = None,
     if not force:
         cached = cache_mod.get(ckey)
         if cached:
+            if progress_callback:
+                progress_callback("cache_hit", companies[0])
             return CompetitiveLandscape.from_dict(cached)
 
-    reports = [report.build(c, provider=provider, force=force, urls=urls)
-               for c in companies]
+    reports = []
+    with ThreadPoolExecutor(max_workers=len(companies)) as pool:
+        futures = {pool.submit(report.build, c, provider=provider,
+                               force=force, urls=urls): c
+                   for c in companies}
+        for f in as_completed(futures):
+            reports.append(f.result())
+    if progress_callback:
+        progress_callback("analyzing", "")
     used = reports[0].meta.get("llm_provider", prov)
 
     prompt = _build_prompt(reports)

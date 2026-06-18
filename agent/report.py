@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
 from . import cache, config, llm, research
@@ -183,7 +184,8 @@ def _coerce(company: str, data: dict, sources, provider, search_provider) -> Rep
 # ── public API ─────────────────────────────────────────────────────────
 
 def build(company: str, provider: str | None = None, force: bool = False,
-          urls: list[str] | None = None) -> Report:
+          urls: list[str] | None = None,
+          progress_callback: Callable[[str, str], None] | None = None) -> Report:
     company = company.strip()
     if not company:
         raise ValueError("company name is empty")
@@ -198,22 +200,31 @@ def build(company: str, provider: str | None = None, force: bool = False,
     if not force:
         cached = cache.get(ckey)
         if cached:
+            if progress_callback:
+                progress_callback("cache_hit", company)
             return Report.from_dict(cached)
 
+    if progress_callback:
+        progress_callback("researching", company)
     sources, search_provider = research.gather(company)
     for u in (urls or []):
         u = u.strip()
         if u:
             sources.append(research.Source(title="Custom Reference", url=u, text=""))
-    prompt = _build_prompt(company, sources)
 
+    if progress_callback:
+        progress_callback("generating", company)
+    prompt = _build_prompt(company, sources)
     raw, used = llm.generate(SYSTEM, prompt, provider=prov)
     try:
         data = _extract_json(raw)
     except Exception:  # noqa: BLE001 — one repair attempt
         repair = prompt + "\n\nYour previous answer was not valid JSON. " \
                           "Return ONLY the JSON object, nothing else."
-        raw, used = llm.generate(SYSTEM, repair, provider=prov)
+        # Try a different provider on retry (better JSON reliability)
+        fallback = [p for p in config.available_llms() if p != (prov or used)]
+        retry_prov = fallback[0] if fallback else None
+        raw, used = llm.generate(SYSTEM, repair, provider=retry_prov)
         data = _extract_json(raw)
 
     report = _coerce(company, data, sources, used, search_provider)

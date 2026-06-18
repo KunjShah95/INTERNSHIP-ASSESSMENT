@@ -27,6 +27,8 @@ BOUNDARIES:
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from . import llm
@@ -71,12 +73,21 @@ def _profile(r: Report) -> str:
 
 def compare(companies: list[str], provider: str | None = None,
             force: bool = False,
-            urls: list[str] | None = None) -> CompareResult:
+            urls: list[str] | None = None,
+            progress_callback: Callable[[str, str], None] | None = None) -> CompareResult:
     companies = [c.strip() for c in companies if c.strip()]
     if len(companies) < 2:
         raise ValueError("provide at least two companies to compare")
 
-    reports = [build(c, provider=provider, force=force, urls=urls) for c in companies]
+    reports = []
+    with ThreadPoolExecutor(max_workers=len(companies)) as pool:
+        futures = {pool.submit(build, c, provider=provider,
+                               force=force, urls=urls): c
+                   for c in companies}
+        for f in as_completed(futures):
+            reports.append(f.result())
+    if progress_callback:
+        progress_callback("comparing", "")
     used = reports[0].meta.get("llm_provider")
 
     prompt = _MATRIX_PROMPT.format(
